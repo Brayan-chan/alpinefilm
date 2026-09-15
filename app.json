@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "AlpineFilm",
+    "slug": "alpinefilm",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": { "backgroundColor": "#050A10" },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.brayanchan.alpinefilm"
+    },
+    "web": {},
+    "plugins": ["expo-secure-store", "expo-video"]
+  }
+}
