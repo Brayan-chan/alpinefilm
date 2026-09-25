@@ -1,0 +1,21 @@
+{
+  "cli": {
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "environment": "preview",
+      "developmentClient": false,
+      "autoIncrement": true,
+      "node": "24.13.0",
+      "bun": "1.4.2",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://100.98.115.100:3000/api/v1"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    }
+  }
+}
