@@ -1,1 +1,9 @@
-export const colors = { background: '#050a10', panel: '#101923', border: '#22303d', text: '#f4f7f9', secondary: '#a9b4bf', muted: '#667482', accent: '#5ee6a8' } as const;
+export const colors = {
+  background: "#0C0C0F",
+  panel: "#19191F",
+  border: "#32323B",
+  text: "#F4F5EF",
+  secondary: "#C3C1CA",
+  muted: "#A19EAC",
+  accent: "#DA263B",
+} as const;
