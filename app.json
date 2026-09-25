@@ -3,17 +3,27 @@
     "name": "AlpineFilm",
     "slug": "alpinefilm",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": { "backgroundColor": "#050A10" },
+      "adaptiveIcon": {
+        "backgroundColor": "#050A10"
+      },
       "predictiveBackGestureEnabled": false,
       "package": "com.brayanchan.alpinefilm"
     },
     "web": {},
-    "plugins": ["expo-secure-store", "expo-video"]
+    "plugins": [
+      "expo-secure-store",
+      "expo-video"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c00df77a-f417-4552-969d-ffcb04f35977"
+      }
+    }
   }
 }
