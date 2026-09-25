@@ -1,134 +1,464 @@
-import { StatusBar } from 'expo-status-bar';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-
-import { api } from './src/api/client';
-import { clearSession, saveSession } from './src/auth/session';
-import { colors } from './src/theme/colors';
-import type { Movie, Session } from './src/types/api';
-
-const movies: Movie[] = [
-  { id: 'demo-1', title: 'Horizonte remoto', description: 'Una expedición descubre una señal imposible en los límites del sistema solar.', year: 2026, durationSeconds: 6420, genres: ['Ciencia ficción', 'Aventura'], posterUrl: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=900', progress: 0.42 },
-  { id: 'demo-2', title: 'Después de la lluvia', description: 'Dos desconocidos reconstruyen sus vidas durante un verano inolvidable.', year: 2025, durationSeconds: 5880, genres: ['Drama'], posterUrl: 'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?w=900' },
-  { id: 'demo-3', title: 'Ruta nocturna', description: 'Un viaje por carretera se convierte en una carrera contra el tiempo.', year: 2024, durationSeconds: 7020, genres: ['Suspenso'], posterUrl: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=900' },
-];
-
-type Screen = 'login' | 'register' | 'home' | 'details' | 'profile' | 'admin';
-
+import { resumePosition } from "./src/playback/progress";
+import { Catalog, type CatalogTab } from "./src/components/Catalog";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { LinearGradient } from "expo-linear-gradient";
+import { Poster } from "./src/components/Poster";
+import { StatusBar } from "expo-status-bar";
+import { useCallback, useEffect, useState } from "react";
+import { Alert, BackHandler, Pressable, Text, View } from "react-native";
+import { api, ApiError, messageOf } from "./src/api/client";
+import type { Movie, Session } from "./src/types/api";
+import { colors } from "./src/theme/colors";
+import { styles } from "./src/theme/styles";
+import { Button, ErrorText, Field, Loading, Page } from "./src/components/ui";
+import { Player } from "./src/components/Player";
+import { Admin } from "./src/components/Admin";
+type Screen = "home" | "details" | "profile" | "admin" | "player";
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('login');
-  const [selected, setSelected] = useState(movies[0]);
-  const [session, setSession] = useState<Session | null>(null);
-  const signIn = (value: Session) => { setSession(value); setScreen('home'); };
-  const openMovie = (movie: Movie) => { setSelected(movie); setScreen('details'); };
-
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+function AppContent() {
+  const [tab, setTab] = useState<CatalogTab>("home");
+  const [session, setSession] = useState<Session | null>(null),
+    [boot, setBoot] = useState(true),
+    [bootError, setBootError] = useState<string>(),
+    [screen, setScreen] = useState<Screen>("home"),
+    [selected, setSelected] = useState<Movie | null>(null),
+    [revision, setRevision] = useState(0);
+  const restore = useCallback(async () => {
+    setBoot(true);
+    setBootError(undefined);
+    try {
+      setSession(await api.restore());
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 401))
+        setBootError(messageOf(e));
+    } finally {
+      setBoot(false);
+    }
+  }, []);
+  useEffect(() => {
+    const unsubscribe = api.subscribe((s) => {
+      setSession(s);
+      if (!s) setScreen("home");
+    });
+    void restore();
+    return unsubscribe;
+  }, [restore]);
+  const back = useCallback(() => {
+    setScreen("home");
+    setRevision((n) => n + 1);
+  }, []);
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (screen === "home") return false;
+      if (screen === "player") {
+        setScreen("details");
+        setRevision((n) => n + 1);
+      } else back();
+      return true;
+    });
+    return () => sub.remove();
+  }, [screen, back]);
   return (
     <View style={styles.app}>
       <StatusBar style="light" />
-      {screen === 'login' && <Login onSignedIn={signIn} onRegister={() => setScreen('register')} />}
-      {screen === 'register' && <Register onSignedIn={signIn} onBack={() => setScreen('login')} />}
-      {screen === 'home' && <Home isAdmin={session?.user.role === 'admin'} onMovie={openMovie} onProfile={() => setScreen('profile')} onAdmin={() => setScreen('admin')} />}
-      {screen === 'details' && <Details movie={selected} onBack={() => setScreen('home')} />}
-      {screen === 'profile' && <Profile username={session?.user.username ?? 'Invitado'} onBack={() => setScreen('home')} onLogout={async () => { await clearSession(); setSession(null); setScreen('login'); }} />}
-      {screen === 'admin' && <Admin onBack={() => setScreen('home')} />}
+      {boot ? (
+        <Loading />
+      ) : bootError ? (
+        <Page title="Conectar con tu servidor">
+          <ErrorText message={bootError} />
+          <Button title="Reintentar" onPress={() => void restore()} />
+          <Button
+            title="Usar otra cuenta"
+            secondary
+            onPress={() =>
+              void api.forgetSession().then(() => setBootError(undefined))
+            }
+          />
+        </Page>
+      ) : !session ? (
+        <Login />
+      ) : screen === "home" ? (
+        <Catalog
+          key={revision}
+          session={session}
+          tab={tab}
+          setTab={setTab}
+          play={(m) => {
+            setSelected(m);
+            setScreen("player");
+          }}
+          open={(m) => {
+            setSelected(m);
+            setScreen("details");
+          }}
+          profile={() => setScreen("profile")}
+          admin={() => setScreen("admin")}
+        />
+      ) : screen === "profile" ? (
+        <Profile session={session} back={back} />
+      ) : screen === "admin" && session.user.role === "admin" ? (
+        <Admin back={back} />
+      ) : screen === "player" && selected ? (
+        <Player
+          movie={selected}
+          back={() => {
+            setScreen("details");
+            setRevision((n) => n + 1);
+          }}
+        />
+      ) : selected ? (
+        <Details
+          key={`${selected.id}-${revision}`}
+          movie={selected}
+          back={back}
+          play={() => setScreen("player")}
+        />
+      ) : null}
     </View>
   );
 }
-
-function Login({ onSignedIn, onRegister }: { onSignedIn: (session: Session) => void; onRegister: () => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const login = async () => {
-    if (!username.trim() || !password) return setError('Escribe tu usuario y contraseña.');
-    setLoading(true); setError(undefined);
-    try { const session = await api.login(username.trim(), password); await saveSession(session); onSignedIn(session); }
-    catch { setError('No se pudo conectar. Comprueba Tailscale y que la API esté encendida.'); }
-    finally { setLoading(false); }
-  };
-  const demo = () => onSignedIn({ accessToken: 'demo', refreshToken: 'demo', user: { id: 'demo', username: 'Brayan', role: 'admin' } });
-
-  return <LinearGradient colors={['#081019', '#111827', '#050a10']} style={styles.flex}>
-    <SafeAreaView style={styles.login}>
-      <View style={styles.logo}><View style={styles.play} /></View>
-      <Text style={styles.brand}>ALPINEFILM</Text>
-      <Text style={styles.loginTitle}>Tu cine, en tu servidor.</Text>
-      <Text style={styles.copy}>Conecta con tu biblioteca privada y continúa viendo desde cualquier lugar.</Text>
-      <View style={styles.form}>
-        <Text style={styles.label}>Usuario</Text>
-        <TextInput autoCapitalize="none" placeholder="Tu usuario" placeholderTextColor={colors.muted} style={styles.input} value={username} onChangeText={setUsername} />
-        <Text style={styles.label}>Contraseña</Text>
-        <TextInput placeholder="••••••••" placeholderTextColor={colors.muted} secureTextEntry style={styles.input} value={password} onChangeText={setPassword} onSubmitEditing={login} />
-        {error && <Text style={styles.error}>{error}</Text>}
-        <Pressable disabled={loading} onPress={login} style={styles.primary}>{loading ? <ActivityIndicator color="#06120d" /> : <Text style={styles.primaryText}>Entrar</Text>}</Pressable>
-        <Pressable onPress={demo} style={styles.demo}><Text style={styles.demoText}>Explorar diseño sin backend</Text></Pressable>
-        <Pressable onPress={onRegister} style={styles.demo}><Text style={styles.registerText}>Crear una cuenta con invitación</Text></Pressable>
+function Login() {
+  const [register, setRegister] = useState(false),
+    [username, setUsername] = useState(""),
+    [password, setPassword] = useState(""),
+    [displayName, setDisplayName] = useState(""),
+    [inviteCode, setInviteCode] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState<string>();
+  async function submit() {
+    if (
+      !username.trim() ||
+      password.length < 8 ||
+      (register && (!displayName.trim() || !inviteCode.trim()))
+    ) {
+      setError(
+        "Completa los campos; la contraseña debe tener al menos 8 caracteres.",
+      );
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (register)
+        await api.register({
+          username: username.trim(),
+          password,
+          displayName: displayName.trim(),
+          inviteCode: inviteCode.trim(),
+        });
+      else await api.login(username.trim(), password);
+    } catch (e) {
+      setError(
+        register && e instanceof ApiError && e.status === 404
+          ? "El registro está desactivado. Solicita tu cuenta al administrador."
+          : messageOf(e),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Page title="">
+      <View
+        style={{
+          width: 64,
+          height: 64,
+          borderRadius: 22,
+          backgroundColor: colors.accent,
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: 24,
+        }}
+      >
+        <Ionicons name="play" size={30} color="#fff" />
       </View>
-      <Text style={styles.privateText}>Conexión privada mediante Tailscale</Text>
-    </SafeAreaView>
-  </LinearGradient>;
+      <Text style={styles.brand}>ALPINEFILM</Text>
+      <Text style={styles.loginTitle}>
+        {register
+          ? "Tu invitación al cine."
+          : "Buenas historias.\nTu propio espacio."}
+      </Text>
+      <Text style={styles.copy}>
+        {register
+          ? "Usa el código de invitación que te proporcionó el administrador."
+          : "Entra a tu biblioteca privada."}
+      </Text>
+      {register && (
+        <Field label="Nombre" value={displayName} onChange={setDisplayName} />
+      )}
+      <Field label="Usuario" value={username} onChange={setUsername} />
+      <Field
+        label="Contraseña"
+        value={password}
+        onChange={setPassword}
+        secret
+      />
+      {register && (
+        <Field
+          label="Código de invitación"
+          value={inviteCode}
+          onChange={setInviteCode}
+          secret
+        />
+      )}
+      <ErrorText message={error} />
+      <Button
+        title={register ? "Crear cuenta" : "Entrar"}
+        busy={busy}
+        onPress={() => void submit()}
+      />
+      <Button
+        title={register ? "Ya tengo cuenta" : "Crear cuenta con invitación"}
+        secondary
+        disabled={busy}
+        onPress={() => {
+          setRegister(!register);
+          setError(undefined);
+        }}
+      />
+    </Page>
+  );
 }
-
-function Register({ onSignedIn, onBack }: { onSignedIn: (session: Session) => void; onBack: () => void }) {
-  const [form,setForm]=useState({displayName:'',username:'',password:'',inviteCode:''}); const [loading,setLoading]=useState(false); const [error,setError]=useState<string>();
-  const field=(key:keyof typeof form)=>(value:string)=>setForm(current=>({...current,[key]:value}));
-  const submit=async()=>{setLoading(true);setError(undefined);try{const session=await api.register(form);await saveSession(session);onSignedIn(session);}catch{setError('No fue posible crear la cuenta. Revisa los datos y el código de invitación.');}finally{setLoading(false);}};
-  return <SafeAreaView style={[styles.safe,styles.register]}><Back onPress={onBack}/><Text style={styles.loginTitle}>Crea tu cuenta.</Text><Text style={styles.copy}>Necesitas el código privado que te proporcionó el administrador.</Text>
-    <Text style={styles.label}>Nombre</Text><TextInput placeholder="Cómo quieres aparecer" placeholderTextColor={colors.muted} style={styles.input} value={form.displayName} onChangeText={field('displayName')}/>
-    <Text style={styles.label}>Usuario</Text><TextInput autoCapitalize="none" placeholder="usuario" placeholderTextColor={colors.muted} style={styles.input} value={form.username} onChangeText={field('username')}/>
-    <Text style={styles.label}>Contraseña</Text><TextInput secureTextEntry placeholder="Mínimo 8 caracteres" placeholderTextColor={colors.muted} style={styles.input} value={form.password} onChangeText={field('password')}/>
-    <Text style={styles.label}>Código de invitación</Text><TextInput autoCapitalize="none" secureTextEntry placeholder="Código privado" placeholderTextColor={colors.muted} style={styles.input} value={form.inviteCode} onChangeText={field('inviteCode')}/>
-    {error&&<Text style={styles.error}>{error}</Text>}<Pressable onPress={submit} disabled={loading} style={styles.primary}>{loading?<ActivityIndicator color="#06120d"/>:<Text style={styles.primaryText}>Crear cuenta</Text>}</Pressable>
-  </SafeAreaView>;
+function Details({
+  movie,
+  back,
+  play,
+}: {
+  movie: Movie;
+  back: () => void;
+  play: () => void;
+}) {
+  const [current, setCurrent] = useState(movie),
+    [favorite, setFavorite] = useState(false),
+    [position, setPosition] = useState(0),
+    [error, setError] = useState<string>(),
+    [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.movie(movie.id), api.favorites(), api.progress()])
+      .then(([m, f, p]) => {
+        if (active) {
+          setCurrent(m);
+          setFavorite(f.some((x) => x.id === m.id));
+          const previous = p.find((x) => x.movieId === m.id);
+          setPosition(
+            resumePosition(
+              previous?.positionSeconds ?? 0,
+              m.durationSeconds ?? 0,
+              previous?.completed,
+            ),
+          );
+        }
+      })
+      .catch((e) => active && setError(messageOf(e)));
+    return () => {
+      active = false;
+    };
+  }, [movie.id]);
+  async function toggle() {
+    setBusy(true);
+    try {
+      await api.favorite(movie.id, !favorite);
+      setFavorite(!favorite);
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Page title="La película" onBack={back}>
+      <View
+        style={{
+          borderRadius: 28,
+          overflow: "hidden",
+          backgroundColor: colors.panel,
+        }}
+      >
+        <Poster
+          movie={current}
+          style={{ aspectRatio: 0.82, borderRadius: 0 }}
+        />
+        <LinearGradient
+          pointerEvents="none"
+          colors={["transparent", colors.panel]}
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 150,
+          }}
+        />
+      </View>
+      <View style={{ paddingHorizontal: 8, marginTop: 20 }}>
+        <Text style={styles.eyebrow}>ALPINEFILM · TU BIBLIOTECA</Text>
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 32,
+            lineHeight: 38,
+            fontWeight: "800",
+            marginTop: 12,
+          }}
+        >
+          {current.title}
+        </Text>
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: 8,
+            marginTop: 16,
+          }}
+        >
+          {[
+            current.year?.toString(),
+            current.durationSeconds
+              ? `${Math.ceil(current.durationSeconds / 60)} min`
+              : null,
+            ...current.genres,
+          ]
+            .filter(Boolean)
+            .map((label, i) => (
+              <View
+                key={`${label}-${i}`}
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  borderRadius: 20,
+                  paddingHorizontal: 12,
+                  paddingVertical: 7,
+                }}
+              >
+                <Text style={{ color: colors.secondary, fontSize: 12 }}>
+                  {label}
+                </Text>
+              </View>
+            ))}
+        </View>
+        <ErrorText message={error} />
+        <Button
+          title={
+            position > 0
+              ? `Continuar · ${Math.floor(position / 60)} min`
+              : "▶  Reproducir"
+          }
+          disabled={current.status !== "published"}
+          onPress={play}
+        />
+        {current.status === "published" ? (
+          <Button
+            title={favorite ? "✓  En mi lista" : "+  Añadir a mi lista"}
+            secondary
+            busy={busy}
+            onPress={() => void toggle()}
+          />
+        ) : (
+          <Text style={styles.copy}>Esta película aún no está publicada.</Text>
+        )}
+        <Text style={styles.sectionTitle}>La historia</Text>
+        <Text style={[styles.copy, { marginTop: 0, lineHeight: 27 }]}>
+          {current.description ||
+            "Todavía no hay una sinopsis para esta película."}
+        </Text>
+      </View>
+    </Page>
+  );
 }
-
-function Home({ isAdmin, onMovie, onProfile, onAdmin }: { isAdmin: boolean; onMovie: (movie: Movie) => void; onProfile: () => void; onAdmin: () => void }) {
-  const [query, setQuery] = useState('');
-  const filtered = useMemo(() => movies.filter(m => m.title.toLowerCase().includes(query.toLowerCase())), [query]);
-  return <SafeAreaView style={styles.safe}><FlatList data={filtered} numColumns={2} keyExtractor={m => m.id} columnWrapperStyle={styles.row} contentContainerStyle={styles.catalog}
-    ListHeaderComponent={<>
-      <View style={styles.header}><View><Text style={styles.eyebrow}>BIBLIOTECA PRIVADA</Text><Text style={styles.homeTitle}>¿Qué vemos hoy?</Text></View><Pressable onPress={onProfile} style={styles.avatar}><Text style={styles.avatarText}>B</Text></Pressable></View>
-      {isAdmin&&<Pressable onPress={onAdmin} style={styles.adminBanner}><View><Text style={styles.adminTitle}>Panel de administración</Text><Text style={styles.cardMeta}>Gestionar películas, estados y subidas</Text></View><Text style={styles.adminArrow}>›</Text></Pressable>}
-      <TextInput placeholder="Buscar una película" placeholderTextColor={colors.muted} style={styles.search} value={query} onChangeText={setQuery} />
-      <Pressable onPress={() => onMovie(movies[0])} style={styles.hero}><Image source={{ uri: movies[0].posterUrl }} style={StyleSheet.absoluteFill} /><LinearGradient colors={['transparent', 'rgba(5,10,16,.97)']} style={StyleSheet.absoluteFill} /><View style={styles.heroContent}><Text style={styles.eyebrow}>CONTINUAR VIENDO</Text><Text style={styles.heroTitle}>{movies[0].title}</Text><View style={styles.track}><View style={styles.fill} /></View><Text style={styles.cardMeta}>42% · 1 h 47 min</Text></View></Pressable>
-      <Text style={styles.sectionTitle}>Disponibles</Text>
-    </>}
-    renderItem={({ item }) => <Pressable onPress={() => onMovie(item)} style={styles.card}><Image source={{ uri: item.posterUrl }} style={styles.poster} /><Text numberOfLines={1} style={styles.cardTitle}>{item.title}</Text><Text style={styles.cardMeta}>{item.year} · {Math.round(item.durationSeconds / 60)} min</Text></Pressable>}
-    ListEmptyComponent={<Text style={styles.copy}>No encontramos películas con ese nombre.</Text>} />
-  </SafeAreaView>;
+function Profile({ session, back }: { session: Session; back: () => void }) {
+  const [current, setCurrent] = useState(""),
+    [next, setNext] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState<string>();
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await action();
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Page
+      title={session.user.displayName ?? session.user.username}
+      onBack={back}
+    >
+      <View
+        style={{
+          alignItems: "center",
+          backgroundColor: colors.panel,
+          borderRadius: 28,
+          padding: 24,
+          marginBottom: 20,
+        }}
+      >
+        <View
+          style={[styles.avatar, { width: 72, height: 72, borderRadius: 36 }]}
+        >
+          <Ionicons name="person-outline" color={colors.accent} size={32} />
+        </View>
+        <Text style={styles.copy}>
+          {session.user.username} ·{" "}
+          {session.user.role === "admin" ? "Administrador" : "Espectador"}
+        </Text>
+      </View>
+      <ErrorText message={error} />
+      <Text style={styles.sectionTitle}>Cambiar contraseña</Text>
+      <Field
+        label="Contraseña actual"
+        value={current}
+        onChange={setCurrent}
+        secret
+      />
+      <Field label="Nueva contraseña" value={next} onChange={setNext} secret />
+      <Button
+        title="Cambiar y cerrar sesiones"
+        busy={busy}
+        onPress={() => void run(() => api.password(current, next))}
+      />
+      <Text style={styles.sectionTitle}>Tus sesiones</Text>
+      <Button
+        title="Cerrar sesión"
+        busy={busy}
+        onPress={() => void run(() => api.logout())}
+      />
+      <Button
+        title="Cerrar todas mis sesiones"
+        secondary
+        disabled={busy}
+        onPress={() => void run(() => api.logout(true))}
+      />
+      {error && (
+        <Button
+          title="Eliminar sesión de este dispositivo"
+          secondary
+          onPress={() =>
+            Alert.alert(
+              "Eliminar sesión local",
+              "Esto no revoca el acceso en el servidor mientras esté desconectado.",
+              [
+                { text: "Cancelar", style: "cancel" },
+                {
+                  text: "Eliminar",
+                  style: "destructive",
+                  onPress: () => void api.forgetSession(),
+                },
+              ],
+            )
+          }
+        />
+      )}
+    </Page>
+  );
 }
-
-function Admin({onBack}:{onBack:()=>void}){return <SafeAreaView style={styles.safe}><View style={styles.adminHeader}><Back onPress={onBack}/><Text style={styles.adminPageTitle}>Administrar</Text></View><ScrollView contentContainerStyle={styles.adminContent}><View style={styles.adminStats}><View><Text style={styles.statNumber}>3</Text><Text style={styles.cardMeta}>Películas</Text></View><View><Text style={styles.statNumber}>1</Text><Text style={styles.cardMeta}>Publicada</Text></View><View><Text style={styles.statNumber}>0</Text><Text style={styles.cardMeta}>Subiendo</Text></View></View><Pressable style={styles.primary}><Text style={styles.primaryText}>＋ Agregar película</Text></Pressable><Text style={styles.sectionTitle}>Contenido</Text>{movies.map(movie=><View key={movie.id} style={styles.adminMovie}><Image source={{uri:movie.posterUrl}} style={styles.adminPoster}/><View style={styles.adminMovieInfo}><Text style={styles.cardTitle}>{movie.title}</Text><Text style={styles.cardMeta}>Borrador · {movie.year}</Text></View><Text style={styles.adminArrow}>›</Text></View>)}</ScrollView></SafeAreaView>}
-
-function Details({ movie, onBack }: { movie: Movie; onBack: () => void }) {
-  return <ScrollView style={styles.safe} contentContainerStyle={styles.details}><View style={styles.detailsHero}><Image source={{ uri: movie.posterUrl }} style={StyleSheet.absoluteFill} /><LinearGradient colors={['rgba(5,10,16,.05)', colors.background]} style={StyleSheet.absoluteFill} /><SafeAreaView><Back onPress={onBack} /></SafeAreaView></View><Text style={styles.detailsTitle}>{movie.title}</Text><Text style={styles.detailsMeta}>{movie.year} · {Math.round(movie.durationSeconds / 60)} min · {movie.genres.join(' / ')}</Text><Text style={styles.description}>{movie.description}</Text><Pressable style={[styles.primary, styles.sideMargin]}><Text style={styles.primaryText}>▶ Reproducir</Text></Pressable><Info title="Reproductor preparado" body={`Usará /api/v1/movies/${movie.id}/stream cuando conectemos el backend.`} /></ScrollView>;
-}
-
-function Profile({ username, onBack, onLogout }: { username: string; onBack: () => void; onLogout: () => void }) {
-  return <SafeAreaView style={styles.safe}><Back onPress={onBack} /><View style={styles.profileAvatar}><Text style={styles.profileLetter}>{username[0]?.toUpperCase()}</Text></View><Text style={[styles.detailsTitle, styles.center]}>{username}</Text><Text style={[styles.detailsMeta, styles.center]}>Conectado a AlpineFilm</Text><Info title="Servidor privado" body={api.baseUrl} /><Pressable onPress={onLogout} style={styles.logout}><Text style={styles.logoutText}>Cerrar sesión</Text></Pressable></SafeAreaView>;
-}
-
-function Back({ onPress }: { onPress: () => void }) { return <Pressable accessibilityLabel="Volver" onPress={onPress} style={styles.back}><Text style={styles.backText}>‹</Text></Pressable>; }
-function Info({ title, body }: { title: string; body: string }) { return <View style={styles.info}><Text style={styles.infoTitle}>{title}</Text><Text style={styles.infoText}>{body}</Text></View>; }
-
-const styles = StyleSheet.create({
-  app: { flex: 1, backgroundColor: colors.background }, flex: { flex: 1 }, safe: { flex: 1, backgroundColor: colors.background },
-  login: { flex: 1, justifyContent: 'center', paddingHorizontal: 28 }, logo: { width: 52, height: 52, borderRadius: 16, backgroundColor: colors.accent, justifyContent: 'center', alignItems: 'center', marginBottom: 18 },
-  play: { marginLeft: 4, width: 0, height: 0, borderTopWidth: 9, borderBottomWidth: 9, borderLeftWidth: 15, borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: '#06120d' },
-  brand: { color: colors.accent, fontSize: 14, fontWeight: '800', letterSpacing: 2.4 }, loginTitle: { color: colors.text, fontSize: 38, lineHeight: 44, fontWeight: '800', marginTop: 12, maxWidth: 330 },
-  register: { paddingHorizontal: 28 }, registerText:{color:colors.accent,fontWeight:'800'},
-  copy: { color: colors.secondary, fontSize: 16, lineHeight: 24, marginTop: 12 }, form: { marginTop: 28 }, label: { color: colors.secondary, fontWeight: '700', fontSize: 13, marginBottom: 8, marginTop: 14 },
-  input: { backgroundColor: colors.panel, color: colors.text, borderWidth: 1, borderColor: colors.border, height: 54, borderRadius: 14, paddingHorizontal: 16, fontSize: 16 }, error: { color: '#fb7185', lineHeight: 20, marginTop: 14 },
-  primary: { backgroundColor: colors.accent, height: 54, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginTop: 20 }, primaryText: { color: '#06120d', fontWeight: '800', fontSize: 16 }, demo: { height: 48, justifyContent: 'center', alignItems: 'center' }, demoText: { color: colors.secondary, fontWeight: '700' }, privateText: { color: colors.muted, textAlign: 'center', fontSize: 12, marginTop: 24 },
-  catalog: { padding: 20, paddingBottom: 48 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, marginBottom: 20 }, eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 1.6 }, homeTitle: { color: colors.text, fontSize: 29, fontWeight: '800', marginTop: 5 },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' }, avatarText: { color: colors.accent, fontWeight: '900', fontSize: 17 },
-  adminBanner:{backgroundColor:'#10271f',borderColor:'#1e6649',borderWidth:1,borderRadius:16,padding:16,marginBottom:18,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},adminTitle:{color:colors.accent,fontWeight:'900',fontSize:15},adminArrow:{color:colors.accent,fontSize:30},
-  search: { height: 50, borderRadius: 15, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, color: colors.text, paddingHorizontal: 16, fontSize: 15, marginBottom: 20 }, hero: { height: 270, borderRadius: 22, overflow: 'hidden', justifyContent: 'flex-end', backgroundColor: colors.panel }, heroContent: { padding: 20 }, heroTitle: { color: colors.text, fontSize: 27, fontWeight: '800', marginTop: 6 }, track: { height: 4, backgroundColor: 'rgba(255,255,255,.25)', borderRadius: 4, marginTop: 16 }, fill: { width: '42%', height: 4, backgroundColor: colors.accent, borderRadius: 4 },
-  sectionTitle: { color: colors.text, fontSize: 21, fontWeight: '800', marginTop: 28, marginBottom: 14 }, row: { gap: 14 }, card: { flex: 1, maxWidth: '48%', marginBottom: 22 }, poster: { width: '100%', aspectRatio: .7, borderRadius: 16, backgroundColor: colors.panel }, cardTitle: { color: colors.text, fontWeight: '800', fontSize: 15, marginTop: 10 }, cardMeta: { color: colors.muted, fontSize: 12, marginTop: 5 },
-  details: { paddingBottom: 50 }, detailsHero: { height: 410, marginBottom: -30 }, back: { margin: 18, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(5,10,16,.75)', alignItems: 'center', justifyContent: 'center' }, backText: { color: colors.text, fontSize: 36, lineHeight: 39, marginTop: -3 }, detailsTitle: { color: colors.text, fontSize: 31, fontWeight: '900', paddingHorizontal: 22 }, detailsMeta: { color: colors.accent, fontSize: 13, fontWeight: '700', paddingHorizontal: 22, marginTop: 8 }, description: { color: colors.secondary, fontSize: 16, lineHeight: 25, paddingHorizontal: 22, marginTop: 20 }, sideMargin: { marginHorizontal: 22 },
-  info: { margin: 22, padding: 18, borderRadius: 16, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border }, infoTitle: { color: colors.text, fontSize: 15, fontWeight: '800' }, infoText: { color: colors.secondary, fontSize: 13, lineHeight: 20, marginTop: 6 },
-  profileAvatar: { alignSelf: 'center', width: 90, height: 90, borderRadius: 45, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginTop: 35, marginBottom: 22 }, profileLetter: { color: '#06120d', fontSize: 35, fontWeight: '900' }, center: { textAlign: 'center' }, logout: { marginHorizontal: 22, height: 52, borderRadius: 14, borderWidth: 1, borderColor: '#7f1d1d', alignItems: 'center', justifyContent: 'center' }, logoutText: { color: '#fda4af', fontWeight: '800' },
-  adminHeader:{flexDirection:'row',alignItems:'center'},adminPageTitle:{color:colors.text,fontSize:25,fontWeight:'900'},adminContent:{padding:22},adminStats:{flexDirection:'row',justifyContent:'space-around',backgroundColor:colors.panel,borderRadius:18,padding:20},statNumber:{color:colors.text,fontSize:26,fontWeight:'900',textAlign:'center'},adminMovie:{flexDirection:'row',alignItems:'center',backgroundColor:colors.panel,borderRadius:16,padding:10,marginBottom:10},adminPoster:{width:52,height:72,borderRadius:9},adminMovieInfo:{flex:1,paddingHorizontal:12},
-});
